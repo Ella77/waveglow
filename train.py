@@ -41,8 +41,18 @@ from mel2samp import Mel2Samp
 def load_checkpoint(checkpoint_path, model, optimizer):
     assert os.path.isfile(checkpoint_path)
     checkpoint_dict = torch.load(checkpoint_path, map_location='cpu')
-    iteration = checkpoint_dict['iteration']
-    optimizer.load_state_dict(checkpoint_dict['optimizer'])
+    '''
+    comment this when finetuning
+    and add checkpoint_path in config.json 
+    '''
+    # iteration = checkpoint_dict['iteration']
+    # optimizer.load_state_dict(checkpoint_dict['optimizer'])
+
+    '''
+    uncomment this when finetuning
+    '''
+    iteration = 1
+
     model_for_loading = checkpoint_dict['model']
     model.load_state_dict(model_for_loading.state_dict())
     print("Loaded checkpoint '{}' (iteration {})" .format(
@@ -94,10 +104,10 @@ def train(num_gpus, rank, group_name, output_directory, epochs, learning_rate,
     # =====START: ADDED FOR DISTRIBUTED======
     train_sampler = DistributedSampler(trainset) if num_gpus > 1 else None
     # =====END:   ADDED FOR DISTRIBUTED======
-    train_loader = DataLoader(trainset, num_workers=1, shuffle=False,
+    train_loader = DataLoader(trainset, num_workers=0, shuffle=False,
                               sampler=train_sampler,
                               batch_size=batch_size,
-                              pin_memory=False,
+                              pin_memory=True,
                               drop_last=True)
 
     # Get shared output_directory ready

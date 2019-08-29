@@ -248,26 +248,39 @@ class WaveGlow(torch.nn.Module):
         output_audio.append(audio)
         return torch.cat(output_audio,1), log_s_list, log_det_W_list
 
-    def infer(self, spect, sigma=1.0):
+    def tacoinfer(self, spect, sigma=1.0):
+        print(spect)
+        #spect = spect.permute(0,2,1)
+        print(spect.size()) #groundtruth[1, 440, 80]) tacomel torch.Size([1, 80, 442])
+        print("------infer")
         spect = self.upsample(spect)
+        #print(spect.min().item(),spect.max().item())
         # trim conv artifacts. maybe pad spec to kernel multiple
         time_cutoff = self.upsample.kernel_size[0] - self.upsample.stride[0]
         spect = spect[:, :, :-time_cutoff]
+        print("size",spect.size()) # torch.Size([1, 80, 92416]) ([1, 80, 113152])
+
 
         spect = spect.unfold(2, self.n_group, self.n_group).permute(0, 2, 1, 3)
-        spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1)
+        print("size",spect.size()) #√size torch.Size([1, 11552, 80, 8]) size torch.Size([1, 14144, 80, 8])
+        print(spect.min().item(),spect.max().item())
+        spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1) #spect normalization
+        print(spect.min().item(),spect.max().item())
 
         if spect.type() == 'torch.cuda.HalfTensor':
             audio = torch.cuda.HalfTensor(spect.size(0),
                                           self.n_remaining_channels,
                                           spect.size(2)).normal_()
+            print(audio.min().item(),audio.max().item())
+
         else:
             audio = torch.cuda.FloatTensor(spect.size(0),
                                            self.n_remaining_channels,
                                            spect.size(2)).normal_()
+            print(audio.min().item(),audio.max().item())
 
         audio = torch.autograd.Variable(sigma*audio)
-
+        print(audio.min().item(),audio.max().item())
         for k in reversed(range(self.n_flows)):
             n_half = int(audio.size(1)/2)
             audio_0 = audio[:,:n_half,:]
@@ -280,6 +293,7 @@ class WaveGlow(torch.nn.Module):
             audio = torch.cat([audio_0, audio_1],1)
 
             audio = self.convinv[k](audio, reverse=True)
+            #print("audioinfer",audio)
 
             if k % self.n_early_every == 0 and k > 0:
                 if spect.type() == 'torch.cuda.HalfTensor':
@@ -289,6 +303,99 @@ class WaveGlow(torch.nn.Module):
                 audio = torch.cat((sigma*z, audio),1)
 
         audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
+        mel_min = audio.min().item()
+        mel_max = audio.max().item()
+        #audio =  audio / audio.max().item()
+        #audio = torch.clamp(audio, min=-1,max=1)
+        #audio = (audio - mel_min) / (mel_max - mel_min)
+        #print("audiod",audio.min().item(),audio.max().item())
+        return audio
+
+
+
+    def infer(self, spect, sigma=1.0):
+
+        # print(spect.min().item(),spect.max().item())
+        print("------infer")
+        print("--------",spect.min().item(),spect.max().item())
+        spect = self.upsample(spect)
+        print("--------",spect.min().item(),spect.max().item())
+        #print(spect.min().item(),spect.max().item())
+        # trim conv artifacts. maybe pad spec to kernel multiple
+        time_cutoff = self.upsample.kernel_size[0] - self.upsample.stride[0]
+        spect = spect[:, :, :-time_cutoff]
+        #print("size",spect.size()) # torch.Size([1, 80, 92416])
+
+
+        spect = spect.unfold(2, self.n_group, self.n_group).permute(0, 2, 1, 3) # size torch.Size([1, 11552, 80, 8])
+        # print("size",spect.size())
+        # print(spect.min().item(),spect.max().item())
+        # print(spect,spect.size(0),spect.size(1),spect.size(2),self.n_remaining_channels) # 1 11552 80 4 / 1 14432 80 4
+        spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1)
+        # print(spect,spect.size(0),spect.size(1),spect.size(2),self.n_remaining_channels) # 1 640 11522 4 / 1 640 14432 4
+        # print("normal",spect.min().item(),spect.max().item())
+
+        if spect.type() == 'torch.cuda.HalfTensor':
+            audio = torch.cuda.HalfTensor(spect.size(0),   # 1 4 11522 / 1 4 14432
+                                          self.n_remaining_channels,
+                                          spect.size(2)).normal_()
+            # print("00",audio.size(),audio,audio.min().item(),audio.max().item()) #-4 to 4
+
+        else:
+            audio = torch.cuda.FloatTensor(spect.size(0),
+                                           self.n_remaining_channels,
+                                           spect.size(2)).normal_()
+            # print("01",audio.min().item(),audio.max().item())
+
+        audio = torch.autograd.Variable(sigma*audio)
+        # print(audio.min().item(),audio.max().item()) #-2 to 2 / -3 to 2
+
+        for k in reversed(range(self.n_flows)):
+
+            n_half = int(audio.size(1)/2) #11500
+            audio_0 = audio[:,:n_half,:]
+            # print("_______________",audio.min().item(),audio.max().item())
+            audio_1 = audio[:,n_half:,:]
+
+            output = self.WN[k]((audio_0, spect)) #여기서
+            s = output[:, n_half:, :]
+            b = output[:, :n_half, :]
+            audio_1 = (audio_1 - b)/torch.exp(s)
+            audio = torch.cat([audio_0, audio_1],1)
+
+            audio = self.convinv[k](audio, reverse=True) #0.2
+            #print("audioinfer",audio)
+            # if(k==3):
+            #     # print("__________")
+            #     # print(audio_0.size(),audio_1.size()) #1 4 11522 / 1 4 14432
+            #     # print(output.min().item(),output.max().item())  #-2 2 / -6 5
+            #     # print(s.min().item(),s.max().item())  #-2 2 / -6 5
+            #     # print(b.min().item(),b.max().item())
+            #     # print(audio_0.min().item(),audio_0.max().item())
+            #     # print(audio_1.min().item(),audio_1.max().item())
+            #     # print(audio.min().item(),audio.max().item())
+            # if(k==1):
+                # print("______test1")
+                # print(output.min().item(),output.max().item())
+                # print(s.min().item(),s.max().item())  #-2 2 / -6 5
+                # print(b.min().item(),b.max().item())
+                # print(audio_0.min().item(),audio_0.max().item())
+                # print(audio_1.min().item(),audio_1.max().item())
+                # print(audio.min().item(),audio.max().item())
+
+            if k % self.n_early_every == 0 and k > 0:
+                if spect.type() == 'torch.cuda.HalfTensor':
+                    z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                    #print("z",z.min().item(),z.max().item())
+                else:
+                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
+                    #print("z",z.min().item(),z.max().item())
+                audio = torch.cat((sigma*z, audio),1)
+                #print("loop",audio.min().item(),audio.max().item())
+
+        audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data #0.22
+        #print("output",audio.min().item(),audio.max().item())
+        # print(spect.min().item(),spect.max().item())
         return audio
 
     @staticmethod

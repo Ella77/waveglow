@@ -32,6 +32,9 @@ import torch
 import torch.utils.data
 import sys
 from scipy.io.wavfile import read
+import numpy as np
+
+k=[]
 
 # We're using the audio processing from TacoTron2 to make sure it matches
 sys.path.insert(0, 'tacotron2')
@@ -54,6 +57,7 @@ def load_wav_to_torch(full_path):
     Loads wavdata into torch array
     """
     sampling_rate, data = read(full_path)
+    print(data)
     return torch.from_numpy(data).float(), sampling_rate
 
 
@@ -77,11 +81,26 @@ class Mel2Samp(torch.utils.data.Dataset):
 
     def get_mel(self, audio):
         audio_norm = audio / MAX_WAV_VALUE
+        # print(audio)
+        # print(type(audio))
+        # print(isinstance(np.float32(audio), np.floating), isinstance(np.float16(audio), np.floating))
+        # print(isinstance(np.float32(audio), (np.floating,float)), isinstance(np.float16(audio), (np.floating,float)))
+
+        #audio_norm = audio/abs(audio).max()*0.99
+
+        #print(abs(audio).max().item())
+        k.append((audio).min().item())
+        #audionorm = audio/abs(audio).max()*0.99
+        #print(audio_norm)
         audio_norm = audio_norm.unsqueeze(0)
         audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
         melspec = self.stft.mel_spectrogram(audio_norm)
+        print("melspec",melspec)
         melspec = torch.squeeze(melspec, 0)
+        print("melspec",melspec)
+        print(melspec.min().item(), melspec.max().item())
         return melspec
+
 
     def __getitem__(self, index):
         # Read audio
@@ -99,9 +118,16 @@ class Mel2Samp(torch.utils.data.Dataset):
         else:
             audio = torch.nn.functional.pad(audio, (0, self.segment_length - audio.size(0)), 'constant').data
 
-        mel = self.get_mel(audio)
-        audio = audio / MAX_WAV_VALUE
 
+
+
+
+        mel = self.get_mel(audio)
+        #audio = audio/abs(audio).max()*0.99
+        #audio = audio/abs(audio).max()
+        audio = audio / MAX_WAV_VALUE
+        print("mel,audio",mel,audio)
+        print(mel.min().item(),mel.max().item(),audio.min().item(),audio.max().item())
         return (mel, audio)
 
     def __len__(self):
@@ -123,20 +149,27 @@ if __name__ == "__main__":
 
     with open(args.config) as f:
         data = f.read()
+
+
     data_config = json.loads(data)["data_config"]
     mel2samp = Mel2Samp(**data_config)
 
     filepaths = files_to_list(args.filelist_path)
+
 
     # Make directory if it doesn't exist
     if not os.path.isdir(args.output_dir):
         os.makedirs(args.output_dir)
         os.chmod(args.output_dir, 0o775)
 
+
     for filepath in filepaths:
         audio, sr = load_wav_to_torch(filepath)
         melspectrogram = mel2samp.get_mel(audio)
         filename = os.path.basename(filepath)
-        new_filepath = args.output_dir + '/' + filename + '.pt'
+        dirname = os.path.dirname(filepath).split('/')[-1]
+        new_filepath = args.output_dir + '/' + dirname + '_j'+filename + '.pt'
         print(new_filepath)
         torch.save(melspectrogram, new_filepath)
+        print(min(k),max(k))
+

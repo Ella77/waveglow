@@ -3,7 +3,8 @@ sys.path.append('tacotron2')
 import torch
 from layers import STFT
 
-
+use_cuda = torch.cuda.is_available()
+device = torch.device('cuda:0' if use_cuda else 'cpu')
 class Denoiser(torch.nn.Module):
     """ Removes model bias from audio produced with waveglow """
 
